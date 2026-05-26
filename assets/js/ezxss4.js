@@ -646,33 +646,38 @@ const EzXSS = {
     handleDOMRender() {
         try {
             const domContent = $('#dom').val();
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(domContent, 'text/html');
-            const meta = doc.createElement('meta');
-            meta.httpEquiv = 'Content-Security-Policy';
-            meta.content = "default-src 'none'; script-src 'none'; connect-src 'none'; img-src data:; style-src 'unsafe-inline';";
-            doc.head.appendChild(meta);
 
-            const serializer = new XMLSerializer();
-            const safeContent = serializer.serializeToString(doc);
-            const byteCharacters = unescape(encodeURIComponent(safeContent));
-            const byteArrays = [];
+            // Captured DOM is attacker-controlled. Render it inside a sandboxed
+            // iframe (no allow-scripts, no allow-same-origin) so scripts cannot
+            // execute and same-origin DOM access is blocked at the parser level,
+            // independent of any CSP. The outer wrapper is fully under our
+            // control; the only attacker value is placed inside the iframe's
+            // srcdoc attribute as HTML-attribute-escaped text.
+            const escaped = domContent
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
 
-            for (let offset = 0; offset < byteCharacters.length; offset += 1024) {
-                const slice = byteCharacters.slice(offset, offset + 1024);
-                const byteNumbers = new Array(slice.length);
-                
-                for (let i = 0; i < slice.length; i++) {
-                    byteNumbers[i] = slice.charCodeAt(i);
-                }
+            const wrapper = '<!DOCTYPE html>'
+                + '<html lang="en"><head><meta charset="utf-8">'
+                + '<title>Rendered DOM (sandboxed)</title>'
+                + '<style>html,body{margin:0;height:100%;background:#222;color:#ccc;'
+                + 'font:13px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}'
+                + '.bar{padding:6px 10px;background:#111;border-bottom:1px solid #333}'
+                + 'iframe{border:0;width:100%;height:calc(100vh - 30px);'
+                + 'display:block;background:#fff}</style>'
+                + '</head><body>'
+                + '<div class="bar">Rendered in a sandboxed iframe '
+                + '(scripts disabled, opaque origin).</div>'
+                + '<iframe sandbox srcdoc="' + escaped + '"></iframe>'
+                + '</body></html>';
 
-                byteArrays.push(new Uint8Array(byteNumbers));
-            }
-
-            const blob = new Blob(byteArrays, { type: 'text/html' });
+            const blob = new Blob([wrapper], { type: 'text/html' });
             const blobUrl = URL.createObjectURL(blob);
 
-            window.open(blobUrl, '_blank');
+            window.open(blobUrl, '_blank', 'noopener,noreferrer');
+            setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 60000);
         } catch (error) {
             console.error('Failed to render DOM:', error);
             alert('Failed to render DOM content');
